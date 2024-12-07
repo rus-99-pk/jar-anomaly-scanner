@@ -1,75 +1,131 @@
-import os, subprocess, argparse, shutil
-from tqdm import tqdm
+import os, argparse, re
+from jawa.classloader import ClassLoader
 
-def analyze_class_file(class_file_path):
-    try:
-        # Decompile the .class file
-        result = subprocess.run(['uncompyle6', '-o', '-', class_file_path], capture_output=True, text=True)
-        source_code = result.stdout
+def init_patterns():
+    '''Patterns to search for:'''
 
-        # Examples of patterns to search for:
-        network_patterns = [
-            'Socket', 'ServerSocket', 'DatagramSocket', 'MulticastSocket',
-            'HttpURLConnection', 'URLConnection', 'URL', 'HtttUrlConnection'
-        ]
-        
-        file_operations_patterns = [
-            'FileInputStream', 'FileOutputStream', 'RandomAccessFile',
-            'FileWriter', 'BufferedWriter', 'BufferedReader'
-        ]
+    network_patterns = [
+       'Socket', 'ServerSocket', 'DatagramSocket', 'MulticastSocket',
+        'HttpURLConnection', 'URLConnection', 'URL'
+    ]
 
-        reflection_patterns = [
-            'Method.invoke', 'Class.forName', 'Constructor.newInstance'
-        ]
-        
-        process_executions_patterns = [
-            'Runtime.getRuntime().exec', 'ProcessBuilder'
-        ]
-        
-        # Search by patterns
-        warnings = 0
-        for pattern in (network_patterns + file_operations_patterns + reflection_patterns + process_executions_patterns):
-            if pattern in source_code:
-                print(f"[WARNING] Potential dangerous operation [{pattern}] detected in {class_file_path}")
-                warnings += 1
-    except Exception as e:
-        print(f"Error analyzing {class_file_path}: {e}")
+    file_operations_patterns = [
+        'FileInputStream', 'FileOutputStream', 'RandomAccessFile',
+        'FileWriter', 'BufferedWriter', 'BufferedReader',
+        'Files', 'Paths'
+    ]
 
-    return warnings
+    reflection_patterns = [
+        'Method.invoke', 'Class.forName', 'Constructor.newInstance',
+        'Field.setAccessible'
+    ]
+
+    process_executions_patterns = [
+        'Runtime.getRuntime().exec', 'ProcessBuilder'
+    ]
+
+    cryptographic_patterns = [
+        'Cipher', 'MessageDigest', 'KeyGenerator',
+        'SecretKeySpec', 'Mac'
+    ]
+
+    dynamic_loading_patterns = [
+        'URLClassLoader', 'ClassLoader.loadClass'
+    ]
+
+    thread_manipulation_patterns = [
+        'Thread', 'ExecutorService'
+    ]
+
+    serialization_patterns = [
+        'ObjectInputStream', 'ObjectOutputStream', 'Serializable',
+        'Externalizable'
+    ]
+
+    unsafe_operations_patterns = [
+        'Unsafe', 'sun.misc.Unsafe'
+    ]
+
+    native_code_execution_patterns = [
+        'System.loadLibrary', 'System.load'
+    ]
+
+    scripting_and_dynamic_execution_patterns = [
+        'ScriptEngineManager', 'GroovyShell', 'NashornScriptEngine',
+        'JavaCompiler', 'javax.script'
+    ]
+
+    sensitive_information_access_patterns = [
+        'System.getProperty', 'System.getenv'
+    ]
+
+    database_access_patterns = [
+        'DriverManager.getConnection', 'Connection.prepareStatement',
+        'Connection.createStatement', 'Connection.executeQuery',
+        'Connection', 'ConnectionImpl'
+    ]
+
+    all_patterns = (
+            network_patterns +
+            file_operations_patterns +
+            reflection_patterns +
+            process_executions_patterns +
+            process_executions_patterns +
+            cryptographic_patterns +
+            dynamic_loading_patterns +
+            thread_manipulation_patterns +
+            serialization_patterns +
+            unsafe_operations_patterns +
+            native_code_execution_patterns +
+            scripting_and_dynamic_execution_patterns +
+            sensitive_information_access_patterns +
+            database_access_patterns
+    )
+
+    return all_patterns
 
 def check_warns(warnings):
+    reset = '\033[0m'
+    red = '\033[1;91m'
+    green = '\033[1;92m'
+
     if warnings > 0:
-        print (f"Found {warnings} warnings!")
+        print (f"\n{red}Found {warnings} warnings!{reset}")
     else:
-        print ("Safety! :)")
+        print (f"{green}Safety! :){reset}")
 
-def extract_and_scan_jar(jar_path, jdk_dir, extracted_dir):
-    # Unpack the JAR file
-    subprocess.run([f'{jdk_dir}/bin/jar', 'xf', jar_path], cwd=extracted_dir)
-
-    # First, count the number of .class files to initialize the progress bar
-    total_class_files = 0
-    for root, dirs, files in os.walk(extracted_dir):
-        total_class_files += sum(1 for file in files if file.endswith('.class'))
-
-    # Create the progress bar
-    progress_bar = tqdm(total=total_class_files, desc="Scanning .class files")
-
-    # Traverse all .class files
-    for root, dirs, files in os.walk(extracted_dir):
-        for file in files:
-            if file.endswith('.class'):
-                class_path = os.path.join(root, file)
-                warnings = analyze_class_file(class_path)
-                progress_bar.update(1)
-    
-    progress_bar.close()
-    check_warns(warnings)
-
-def extract(extracted_dir):
-    # Create a temporary directory for unpacking the JAR
-    shutil.rmtree(extracted_dir, ignore_errors=True)
-    os.makedirs(extracted_dir, exist_ok=True)
+def extract_and_scan_jar(jar_path, out_path, in_file=False):
+    if out_path != None:
+        in_file = True
+    else:
+        os.rmdir(out_path)
+    all_patterns = init_patterns()
+    loader = ClassLoader(jar_path)
+    warnings = 0
+    try:
+        for class_path in loader.classes:
+            cf = loader[class_path]
+            # Using a regular expression for object search
+            match = re.search(r"value='([^']+)'", str(cf.this.name))
+            if match:
+                value_content = match.group(1)
+                # Search by patterns
+                for pattern in all_patterns:
+                    if pattern in value_content:
+                        if in_file:
+                            try:
+                                with open(out_path, 'a') as file:
+                                    print(f"[WARNING] Potential dangerous operation [{pattern}] detected in {value_content}", file=file)
+                            except:
+                                print ("Error opening th file")
+                        else:
+                            print(f"[WARNING] Potential dangerous operation [{pattern}] detected in {value_content}")
+                        warnings += 1        
+            else:
+                print("I don't know what happened 🤷🏽‍♂️")
+        check_warns(warnings)
+    except Exception as e:
+        print(f"Error analyzing {jar_path}: {e}")
 
 def arg_parser():
     # Create a parser
@@ -77,28 +133,27 @@ def arg_parser():
     
     # Add args
     parser.add_argument('--path', type=str, help='path to jar file (/tmp/my_jar.jar)')
-    parser.add_argument('--java', type=str, help='path to JAVA_HOME (/opt/jdk-17/)')
+    parser.add_argument('--out', type=str, help='path to log output file (/tmp/scan_result.txt)')
 
     # Parse args
     args = parser.parse_args()
 
-    # Using args
-    if args.path == None:
-        print ("Select a file")
+    try:
+        args = parser.parse_args()
+    except SystemExit:
+        # If we have a parser error, it will print and program will be closed
+        parser.print_help()
         os._exit(2)
+    
+    if args.path[-4:] != '.jar':
+        parser.print_help()
+        raise TypeError('Only *.jar file')
 
-    if args.java == None:
-        print ("Set JAVA_HOME")
-        os._exit(2)
-
-    return args.path, args.java
+    return args.path, args.out
 
 def main():
-    extracted_dir = '/tmp/jar_extracted'
-    jar_path, jdk_dir = arg_parser()
-    
-    extract(extracted_dir)
-    extract_and_scan_jar(jar_path, jdk_dir, extracted_dir)
+    jar_path, out_path = arg_parser()
+    extract_and_scan_jar(jar_path, out_path)
 
 if __name__ == '__main__':
     main()

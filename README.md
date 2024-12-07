@@ -1,2 +1,1 @@
-# jar-anomaly-scanner
-Jar anomaly detector on Python 
+# Jar anomaly detector on Python
